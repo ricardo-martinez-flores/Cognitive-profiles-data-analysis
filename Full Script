@@ -1,0 +1,671 @@
+# ===============================================================================
+# Cogni-Action Project: Statistical Analysis Script
+# ===============================================================================
+# 
+# Purpose: Complete statistical analysis for the manuscript "Adolescents' 
+#          Cognitive Profiles, Academic Achievement, and Prevalence of Poor 
+#          Brain Capital: A Latent Class Analysis — The Cogni-Action Project"
+#
+# Data availability: Due to restrictions from the Chilean national funding 
+#                    agency (ANID), raw data are available upon reasonable request.
+#                    This script provides complete transparency of all analytical
+#                    procedures used in the study.
+#
+# Analysis includes:
+#   1. Latent Class Analysis (LCA) for cognitive profiles
+#   2. Mixed models for academic achievement across cognitive profiles
+#   3. Binary logistic regression for academic achievement odds ratios
+#   4. Binary logistic regression for brain capital risk and school vulnerability
+#
+# Authors: Ricardo Martínez [analysis designer]
+#          Carlos Cristi-Montero [corresponding author]
+#
+# Contact: ricardo.antonio.martinezf@gmail.com
+#          carlos.cristi.montero@gmail.com
+#
+# Date: February 2026
+#
+# License: MIT License
+#          Copyright (c) 2026 Ricardo Martínez & Carlos Cristi-Montero
+#          See LICENSE file or https://opensource.org/licenses/MIT
+#
+# Citation: If you use this code in your research, please cite:
+#           [Manuscript citation - to be added upon publication]
+#           
+#           For now, cite as:
+#           Martínez, R., & Cristi-Montero, C. (2026). Cogni-Action Project: 
+#           Statistical Analysis Script. GitHub repository: [your-repo-url]
+# ===============================================================================
+# 1. SETUP AND PACKAGE INSTALLATION
+# ===============================================================================
+
+# Clear environment
+rm(list = ls())
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Install required packages if not already installed
+packages <- c("poLCA", "lme4", "lmerTest", "performance", "emmeans", 
+              "ggplot2", "dplyr", "tidyr", "haven")
+
+install_if_missing <- function(pkg) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+invisible(lapply(packages, install_if_missing))
+
+# ===============================================================================
+# 2. DATA LOADING
+# ===============================================================================
+
+# Note: Replace this with your actual data loading code
+# Example for SPSS file:
+# data <- haven::read_sav("your_data_file.sav")
+
+# For this script to be executable, we'll assume data is loaded into 'data'
+# The data should contain the following variables:
+
+# Cognitive variables (percentile-transformed, 1-5 scale):
+#   - TMTA: Trail Making Test A (time reversed)
+#   - TMTB: Trail Making Test B (time reversed)  
+#   - Forward_Memory_Span: Forward memory span (correct responses)
+#   - Reverse_Memory_Span: Reverse memory span (correct responses)
+#   - GoNoGo: Go/NoGo test (time reversed)
+#   - Scale_Balance: Problem solving scale balance (correct responses)
+#   - Digit_Symbol: Digit Symbol test (difference score)
+#   - Progressive_Matrices: Raven's Progressive Matrices (correct responses)
+
+# Academic variables:
+#   - Language: Language achievement score
+#   - Mathematics: Mathematics achievement score
+#   - Science: Science achievement score
+#   - PISA: Average PISA score
+
+# Demographic and covariate variables:
+#   - ID_Sex: Sex (categorical)
+#   - Ant_PHV_Stand: Peak height velocity standardized
+#   - Fit_Global_Fitness: Global fitness score
+#   - Ant_BMI_Dic: BMI dichotomous
+#   - SC_School: School ID (for random effects)
+#   - SC_SVI_Cat: School vulnerability index (categorical)
+
+# Binary outcome variables for logistic regression:
+#   - Language_Cat: Language achievement (0 = low, 1 = high)
+#   - Mathematics_Cat: Mathematics achievement (0 = low, 1 = high)
+#   - Science_Cat: Science achievement (0 = low, 1 = high)
+#   - PISA_Cat: PISA score (0 = low, 1 = high)
+#   - Brain_Capital_Risk: Brain capital risk (0 = no, 1 = yes)
+#   - Reading_Cat: Reading achievement (0 = low, 1 = high)
+
+# ===============================================================================
+# 3. LATENT CLASS ANALYSIS (LCA)
+# ===============================================================================
+
+cat("\n=== LATENT CLASS ANALYSIS ===\n\n")
+
+# Prepare cognitive variables for LCA
+# Note: Variables must be integers from 1 to maximum level (no 0s)
+# Already transformed to percentiles (1-5 scale) in jamovi
+
+# Create formula for LCA
+lca_formula <- cbind(
+  TMTA,
+  TMTB, 
+  Forward_Memory_Span,
+  Reverse_Memory_Span,
+  GoNoGo,
+  Scale_Balance,
+  Digit_Symbol,
+  Progressive_Matrices
+) ~ 1
+
+# Fit LCA models with 1-5 classes
+# We'll fit multiple models and compare fit indices
+
+lca_models <- list()
+fit_indices <- data.frame(
+  Classes = 1:5,
+  AIC = NA,
+  BIC = NA,
+  ABIC = NA,
+  CAIC = NA,
+  LogLik = NA,
+  npar = NA
+)
+
+for (k in 1:5) {
+  cat(paste0("Fitting LCA model with ", k, " classes...\n"))
+  
+  # Fit model with multiple random starts
+  lca_models[[k]] <- poLCA(
+    formula = lca_formula,
+    data = data,
+    nclass = k,
+    maxiter = 10000,
+    nrep = 50,  # Multiple random starts
+    verbose = FALSE,
+    calc.se = TRUE
+  )
+  
+  # Store fit indices
+  fit_indices$AIC[k] <- lca_models[[k]]$aic
+  fit_indices$BIC[k] <- lca_models[[k]]$bic
+  
+  # Calculate ABIC (sample-size adjusted BIC)
+  n <- lca_models[[k]]$N
+  k_params <- lca_models[[k]]$npar
+  loglik <- lca_models[[k]]$llik
+  fit_indices$ABIC[k] <- -2 * loglik + k_params * log((n + 2) / 24)
+  
+  # Calculate CAIC (Consistent AIC)
+  fit_indices$CAIC[k] <- -2 * loglik + k_params * (log(n) + 1)
+  
+  fit_indices$LogLik[k] <- loglik
+  fit_indices$npar[k] <- k_params
+}
+
+# Print fit indices table
+cat("\n--- Model Fit Comparison ---\n")
+print(fit_indices)
+
+# Select best model (based on your results, 5 classes)
+best_k <- 5
+best_model <- lca_models[[best_k]]
+
+cat(paste0("\nSelected model: ", best_k, " classes\n"))
+cat(paste0("Final log-likelihood: ", round(best_model$llik, 3), "\n"))
+cat(paste0("Entropy: ", round(best_model$entropy, 3), "\n"))
+
+# Class sizes and proportions
+cat("\n--- Class Membership ---\n")
+class_table <- data.frame(
+  Class = 1:best_k,
+  N = best_model$P,
+  Proportion = round(best_model$P / sum(best_model$P), 3)
+)
+print(class_table)
+
+# Save class membership to data
+data$Cognitive_Profile <- best_model$predclass
+data$Cognitive_Profile <- factor(
+  data$Cognitive_Profile,
+  levels = 1:best_k,
+  labels = paste0("Class_", 1:best_k)
+)
+
+# Item response probabilities
+cat("\n--- Item Response Probabilities by Class ---\n")
+for (i in 1:length(best_model$probs)) {
+  cat(paste0("\n", names(best_model$probs)[i], ":\n"))
+  print(round(best_model$probs[[i]], 3))
+}
+
+# Create profile plot
+# Extract probabilities for plotting
+prob_data <- list()
+var_names <- c("TMTA", "TMTB", "Forward Memory Span", "Reverse Memory Span",
+               "Go/NoGo Test", "Scale Balance", "Digit Symbol", "Progressive Matrices")
+
+for (v in 1:length(best_model$probs)) {
+  for (k in 1:best_k) {
+    # Get probability of highest category (level 5) for each class
+    prob_data[[length(prob_data) + 1]] <- data.frame(
+      Variable = var_names[v],
+      Class = paste0("Class ", k),
+      Probability = best_model$probs[[v]][k, ncol(best_model$probs[[v]])]
+    )
+  }
+}
+
+plot_data <- do.call(rbind, prob_data)
+
+# Plot
+profile_plot <- ggplot(plot_data, aes(x = Variable, y = Probability, 
+                                       group = Class, color = Class)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom") +
+  labs(title = "Cognitive Profile Plot",
+       subtitle = "Probability of highest performance level (5) by class",
+       x = "Cognitive Test",
+       y = "Probability") +
+  scale_y_continuous(limits = c(0, 1))
+
+print(profile_plot)
+
+# Save plot
+ggsave("lca_profile_plot.png", profile_plot, width = 10, height = 6, dpi = 300)
+
+# Create elbow plot for model selection
+elbow_plot <- ggplot(fit_indices, aes(x = Classes)) +
+  geom_line(aes(y = AIC, color = "AIC"), linewidth = 1) +
+  geom_point(aes(y = AIC, color = "AIC"), size = 3) +
+  geom_line(aes(y = BIC, color = "BIC"), linewidth = 1) +
+  geom_point(aes(y = BIC, color = "BIC"), size = 3) +
+  geom_line(aes(y = ABIC, color = "ABIC"), linewidth = 1) +
+  geom_point(aes(y = ABIC, color = "ABIC"), size = 3) +
+  geom_line(aes(y = CAIC, color = "CAIC"), linewidth = 1) +
+  geom_point(aes(y = CAIC, color = "CAIC"), size = 3) +
+  theme_minimal() +
+  labs(title = "Model Fit Comparison",
+       x = "Number of Classes",
+       y = "Fit Index Value",
+       color = "Fit Index") +
+  scale_color_manual(values = c("AIC" = "#E41A1C", "BIC" = "#377EB8",
+                                  "ABIC" = "#4DAF4A", "CAIC" = "#984EA3"))
+
+print(elbow_plot)
+ggsave("lca_elbow_plot.png", elbow_plot, width = 8, height = 6, dpi = 300)
+
+# ===============================================================================
+# 4. MIXED MODELS FOR ACADEMIC ACHIEVEMENT
+# ===============================================================================
+
+cat("\n\n=== MIXED MODELS FOR ACADEMIC ACHIEVEMENT ===\n\n")
+
+# Set reference level for cognitive profile (typically the best-performing class)
+data$Cognitive_Profile <- relevel(data$Cognitive_Profile, ref = "Class_1")
+
+# Convert other factors
+data$ID_Sex <- as.factor(data$ID_Sex)
+data$Ant_BMI_Dic <- as.factor(data$Ant_BMI_Dic)
+data$SC_SVI_Cat <- as.factor(data$SC_SVI_Cat)
+
+# --- 4.1 Language Achievement ---
+cat("\n--- Model 1: Language Achievement ---\n")
+
+model_language <- lmer(
+  Language ~ 1 + ID_Sex + Ant_PHV_Stand + Fit_Global_Fitness + 
+    Ant_BMI_Dic + Cognitive_Profile + SC_SVI_Cat + 
+    ID_Sex:Ant_PHV_Stand + (1 | SC_School),
+  data = data,
+  REML = TRUE,
+  control = lmerControl(optimizer = "bobyqa")
+)
+
+# Model summary
+summary(model_language)
+
+# Model fit statistics
+cat("\n--- Model Fit Statistics ---\n")
+print(performance::model_performance(model_language))
+
+# ANOVA table (Type III)
+cat("\n--- ANOVA Table (Type III) ---\n")
+print(anova(model_language, type = "III"))
+
+# Estimated marginal means for cognitive profiles
+cat("\n--- Estimated Marginal Means by Cognitive Profile ---\n")
+emm_language <- emmeans(model_language, ~ Cognitive_Profile)
+print(summary(emm_language))
+
+# Pairwise comparisons
+cat("\n--- Pairwise Comparisons (Bonferroni adjusted) ---\n")
+pairs_language <- pairs(emm_language, adjust = "bonferroni")
+print(summary(pairs_language))
+
+# --- 4.2 Mathematics Achievement ---
+cat("\n\n--- Model 2: Mathematics Achievement ---\n")
+
+model_mathematics <- lmer(
+  Mathematics ~ 1 + ID_Sex + Ant_PHV_Stand + Fit_Global_Fitness + 
+    Ant_BMI_Dic + Cognitive_Profile + (1 | SC_School),
+  data = data,
+  REML = TRUE,
+  control = lmerControl(optimizer = "bobyqa")
+)
+
+summary(model_mathematics)
+cat("\n--- Model Fit Statistics ---\n")
+print(performance::model_performance(model_mathematics))
+cat("\n--- ANOVA Table (Type III) ---\n")
+print(anova(model_mathematics, type = "III"))
+
+cat("\n--- Estimated Marginal Means by Cognitive Profile ---\n")
+emm_mathematics <- emmeans(model_mathematics, ~ Cognitive_Profile)
+print(summary(emm_mathematics))
+
+cat("\n--- Pairwise Comparisons (Bonferroni adjusted) ---\n")
+print(summary(pairs(emm_mathematics, adjust = "bonferroni")))
+
+# --- 4.3 Science Achievement ---
+cat("\n\n--- Model 3: Science Achievement ---\n")
+
+model_science <- lmer(
+  Science ~ 1 + ID_Sex + Ant_PHV_Stand + Fit_Global_Fitness + 
+    Ant_BMI_Dic + Cognitive_Profile + (1 | SC_School),
+  data = data,
+  REML = TRUE,
+  control = lmerControl(optimizer = "bobyqa")
+)
+
+summary(model_science)
+cat("\n--- Model Fit Statistics ---\n")
+print(performance::model_performance(model_science))
+cat("\n--- ANOVA Table (Type III) ---\n")
+print(anova(model_science, type = "III"))
+
+cat("\n--- Estimated Marginal Means by Cognitive Profile ---\n")
+emm_science <- emmeans(model_science, ~ Cognitive_Profile)
+print(summary(emm_science))
+
+cat("\n--- Pairwise Comparisons (Bonferroni adjusted) ---\n")
+print(summary(pairs(emm_science, adjust = "bonferroni")))
+
+# --- 4.4 PISA Average Score ---
+cat("\n\n--- Model 4: PISA Average Score ---\n")
+
+model_pisa <- lmer(
+  PISA ~ 1 + ID_Sex + Ant_PHV_Stand + Fit_Global_Fitness + 
+    Ant_BMI_Dic + Cognitive_Profile + (1 | SC_School),
+  data = data,
+  REML = TRUE,
+  control = lmerControl(optimizer = "bobyqa")
+)
+
+summary(model_pisa)
+cat("\n--- Model Fit Statistics ---\n")
+print(performance::model_performance(model_pisa))
+cat("\n--- ANOVA Table (Type III) ---\n")
+print(anova(model_pisa, type = "III"))
+
+cat("\n--- Estimated Marginal Means by Cognitive Profile ---\n")
+emm_pisa <- emmeans(model_pisa, ~ Cognitive_Profile)
+print(summary(emm_pisa))
+
+cat("\n--- Pairwise Comparisons (Bonferroni adjusted) ---\n")
+print(summary(pairs(emm_pisa, adjust = "bonferroni")))
+
+# Create forest plot of cognitive profile effects
+# Extract fixed effects for cognitive profiles from all models
+profile_effects <- data.frame(
+  Model = character(),
+  Profile = character(),
+  Estimate = numeric(),
+  SE = numeric(),
+  CI_lower = numeric(),
+  CI_upper = numeric()
+)
+
+extract_profile_effects <- function(model, model_name) {
+  coefs <- summary(model)$coefficients
+  profile_rows <- grep("Cognitive_Profile", rownames(coefs))
+  
+  if (length(profile_rows) > 0) {
+    for (i in profile_rows) {
+      profile_name <- gsub("Cognitive_Profile", "", rownames(coefs)[i])
+      estimate <- coefs[i, "Estimate"]
+      se <- coefs[i, "Std. Error"]
+      
+      profile_effects <<- rbind(
+        profile_effects,
+        data.frame(
+          Model = model_name,
+          Profile = profile_name,
+          Estimate = estimate,
+          SE = se,
+          CI_lower = estimate - 1.96 * se,
+          CI_upper = estimate + 1.96 * se
+        )
+      )
+    }
+  }
+}
+
+extract_profile_effects(model_language, "Language")
+extract_profile_effects(model_mathematics, "Mathematics")
+extract_profile_effects(model_science, "Science")
+extract_profile_effects(model_pisa, "PISA")
+
+# Forest plot
+forest_plot <- ggplot(profile_effects, aes(x = Estimate, y = Profile, color = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper), 
+                 height = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(size = 3, position = position_dodge(width = 0.5)) +
+  facet_wrap(~ Model, ncol = 1) +
+  theme_minimal() +
+  labs(title = "Effect of Cognitive Profiles on Academic Achievement",
+       subtitle = "Reference: Class 1 (Best performing)",
+       x = "Effect Estimate (95% CI)",
+       y = "Cognitive Profile") +
+  theme(legend.position = "none")
+
+print(forest_plot)
+ggsave("mixed_models_forest_plot.png", forest_plot, width = 10, height = 8, dpi = 300)
+
+# ===============================================================================
+# 5. BINARY LOGISTIC REGRESSION - ACADEMIC ACHIEVEMENT
+# ===============================================================================
+
+cat("\n\n=== BINARY LOGISTIC REGRESSION: ACADEMIC ACHIEVEMENT ===\n\n")
+
+# Set reference level for cognitive profile
+data$Cognitive_Profile <- relevel(data$Cognitive_Profile, ref = "Class_1")
+
+# Function to fit and summarize logistic regression
+fit_logistic <- function(outcome, outcome_name) {
+  cat(paste0("\n--- ", outcome_name, " ---\n"))
+  
+  formula_str <- paste0(outcome, " ~ Cognitive_Profile")
+  model <- glm(
+    as.formula(formula_str),
+    data = data,
+    family = binomial(link = "logit")
+  )
+  
+  # Model summary
+  print(summary(model))
+  
+  # Odds ratios with 95% CI
+  cat("\n--- Odds Ratios (95% CI) ---\n")
+  or_results <- exp(cbind(OR = coef(model), confint(model)))
+  print(or_results)
+  
+  # Model fit statistics
+  cat("\n--- Model Fit Statistics ---\n")
+  cat(paste0("Deviance: ", round(model$deviance, 3), "\n"))
+  cat(paste0("AIC: ", round(AIC(model), 3), "\n"))
+  cat(paste0("BIC: ", round(BIC(model), 3), "\n"))
+  
+  # McFadden's pseudo R²
+  null_model <- glm(
+    as.formula(paste0(outcome, " ~ 1")),
+    data = data,
+    family = binomial(link = "logit")
+  )
+  mcfadden_r2 <- 1 - (logLik(model) / logLik(null_model))
+  cat(paste0("McFadden's R²: ", round(mcfadden_r2, 3), "\n"))
+  
+  return(list(model = model, or_results = or_results))
+}
+
+# Fit models for each academic outcome
+logistic_language <- fit_logistic("Language_Cat", "Language Achievement (High vs Low)")
+logistic_math <- fit_logistic("Mathematics_Cat", "Mathematics Achievement (High vs Low)")
+logistic_science <- fit_logistic("Science_Cat", "Science Achievement (High vs Low)")
+logistic_pisa <- fit_logistic("PISA_Cat", "PISA Score (High vs Low)")
+
+# Create odds ratio forest plot
+or_data <- data.frame(
+  Outcome = character(),
+  Profile = character(),
+  OR = numeric(),
+  CI_lower = numeric(),
+  CI_upper = numeric()
+)
+
+extract_or <- function(logistic_result, outcome_name) {
+  or_matrix <- logistic_result$or_results
+  profile_rows <- grep("Cognitive_Profile", rownames(or_matrix))
+  
+  if (length(profile_rows) > 0) {
+    for (i in profile_rows) {
+      profile_name <- gsub("Cognitive_Profile", "", rownames(or_matrix)[i])
+      or_data <<- rbind(
+        or_data,
+        data.frame(
+          Outcome = outcome_name,
+          Profile = profile_name,
+          OR = or_matrix[i, "OR"],
+          CI_lower = or_matrix[i, 1],
+          CI_upper = or_matrix[i, 2]
+        )
+      )
+    }
+  }
+}
+
+extract_or(logistic_language, "Language")
+extract_or(logistic_math, "Mathematics")
+extract_or(logistic_science, "Science")
+extract_or(logistic_pisa, "PISA")
+
+# Odds ratio forest plot
+or_forest_plot <- ggplot(or_data, aes(x = OR, y = Profile, color = Outcome)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper), 
+                 height = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(size = 3, position = position_dodge(width = 0.5)) +
+  scale_x_log10() +
+  facet_wrap(~ Outcome, ncol = 1) +
+  theme_minimal() +
+  labs(title = "Odds Ratios for High Academic Achievement by Cognitive Profile",
+       subtitle = "Reference: Class 1 (Best performing)",
+       x = "Odds Ratio (95% CI, log scale)",
+       y = "Cognitive Profile") +
+  theme(legend.position = "none")
+
+print(or_forest_plot)
+ggsave("logistic_or_forest_plot.png", or_forest_plot, width = 10, height = 8, dpi = 300)
+
+# ===============================================================================
+# 6. BINARY LOGISTIC REGRESSION - BRAIN CAPITAL & VULNERABILITY
+# ===============================================================================
+
+cat("\n\n=== BINARY LOGISTIC REGRESSION: BRAIN CAPITAL RISK & VULNERABILITY ===\n\n")
+
+# --- 6.1 Brain Capital Risk by Cognitive Profile ---
+logistic_brain_capital <- fit_logistic(
+  "Brain_Capital_Risk", 
+  "Brain Capital Risk (Yes vs No)"
+)
+
+# --- 6.2 Reading Achievement by Cognitive Profile ---
+logistic_reading <- fit_logistic(
+  "Reading_Cat",
+  "Reading Achievement (High vs Low)"
+)
+
+# Additional model with school vulnerability
+cat("\n\n--- Brain Capital Risk with School Vulnerability ---\n")
+model_brain_vuln <- glm(
+  Brain_Capital_Risk ~ Cognitive_Profile + SC_SVI_Cat,
+  data = data,
+  family = binomial(link = "logit")
+)
+
+print(summary(model_brain_vuln))
+
+cat("\n--- Odds Ratios (95% CI) ---\n")
+or_brain_vuln <- exp(cbind(OR = coef(model_brain_vuln), 
+                            confint(model_brain_vuln)))
+print(or_brain_vuln)
+
+# ===============================================================================
+# 7. DESCRIPTIVE STATISTICS BY COGNITIVE PROFILE
+# ===============================================================================
+
+cat("\n\n=== DESCRIPTIVE STATISTICS BY COGNITIVE PROFILE ===\n\n")
+
+# Academic achievement by cognitive profile
+academic_vars <- c("Language", "Mathematics", "Science", "PISA")
+
+descriptives <- data %>%
+  group_by(Cognitive_Profile) %>%
+  summarise(
+    N = n(),
+    Language_M = mean(Language, na.rm = TRUE),
+    Language_SD = sd(Language, na.rm = TRUE),
+    Mathematics_M = mean(Mathematics, na.rm = TRUE),
+    Mathematics_SD = sd(Mathematics, na.rm = TRUE),
+    Science_M = mean(Science, na.rm = TRUE),
+    Science_SD = sd(Science, na.rm = TRUE),
+    PISA_M = mean(PISA, na.rm = TRUE),
+    PISA_SD = sd(PISA, na.rm = TRUE)
+  )
+
+print(descriptives)
+
+# Proportions of high achievement by cognitive profile
+proportions <- data %>%
+  group_by(Cognitive_Profile) %>%
+  summarise(
+    N = n(),
+    Language_High_Pct = mean(Language_Cat == 1, na.rm = TRUE) * 100,
+    Mathematics_High_Pct = mean(Mathematics_Cat == 1, na.rm = TRUE) * 100,
+    Science_High_Pct = mean(Science_Cat == 1, na.rm = TRUE) * 100,
+    PISA_High_Pct = mean(PISA_Cat == 1, na.rm = TRUE) * 100,
+    Brain_Capital_Risk_Pct = mean(Brain_Capital_Risk == 1, na.rm = TRUE) * 100
+  )
+
+print(proportions)
+
+# ===============================================================================
+# 8. EXPORT RESULTS
+# ===============================================================================
+
+cat("\n\n=== SAVING RESULTS ===\n\n")
+
+# Save all model objects
+save(
+  best_model,
+  model_language,
+  model_mathematics,
+  model_science,
+  model_pisa,
+  logistic_language,
+  logistic_math,
+  logistic_science,
+  logistic_pisa,
+  logistic_brain_capital,
+  logistic_reading,
+  model_brain_vuln,
+  file = "cogni_action_models.RData"
+)
+
+# Export descriptive statistics
+write.csv(descriptives, "descriptive_statistics.csv", row.names = FALSE)
+write.csv(proportions, "achievement_proportions.csv", row.names = FALSE)
+
+# Export fit indices
+write.csv(fit_indices, "lca_fit_indices.csv", row.names = FALSE)
+
+# Export class membership
+class_membership <- data %>%
+  select(ID_Case, Cognitive_Profile) %>%
+  mutate(Class_Number = as.numeric(gsub("Class_", "", Cognitive_Profile)))
+
+write.csv(class_membership, "class_membership.csv", row.names = FALSE)
+
+cat("\n=== ANALYSIS COMPLETE ===\n")
+cat("Results saved to working directory.\n")
+cat("Model objects saved in: cogni_action_models.RData\n")
+cat("Plots saved as PNG files.\n")
+
+# ===============================================================================
+# SESSION INFO
+# ===============================================================================
+
+cat("\n\n=== SESSION INFORMATION ===\n\n")
+print(sessionInfo())
+
+# ===============================================================================
+# END OF SCRIPT
+# ===============================================================================
